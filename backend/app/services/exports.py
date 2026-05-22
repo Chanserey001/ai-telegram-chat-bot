@@ -79,14 +79,14 @@ async def ensure_khmer_font() -> str | None:
 
 
 def _build_unicode_pdf() -> Any:
-    """Build a new PDF with Khmer font support."""
+    """Build a new PDF with Khmer font support using proper Unicode handling."""
     from fpdf import FPDF  # noqa: PLC0415
 
-    pdf = FPDF()
-    pdf.set_margins(left=18, top=18, right=18)
-    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf = FPDF(font_cache_dir="DEPRECATED")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_margins(left=15, top=15, right=15)
     
-    # Add Khmer font BEFORE adding page
+    # Add Khmer font with Unicode support
     font_path = str(_KHMER_FONT_PATH) if _KHMER_FONT_PATH.exists() else None
     
     if not font_path and _KHMER_FONT_CACHE:
@@ -97,57 +97,94 @@ def _build_unicode_pdf() -> Any:
         except Exception:
             pass
     
-    if font_path:
-        try:
-            # Add font with proper parameters for Khmer support
-            pdf.add_font(family="Khmer", fname=font_path, uni=True)
-        except Exception as e:
-            raise RuntimeError(f"Failed to add Khmer font from {font_path}: {e}") from e
-    else:
+    if not font_path:
         raise RuntimeError("Khmer font not available - could not download or cache font file")
     
-    # Now add page after font is registered
+    try:
+        # Register Khmer font with full Unicode support and text shaping
+        pdf.add_font(family="Khmer", fname=font_path, uni=True)
+    except Exception as e:
+        raise RuntimeError(f"Failed to add Khmer font: {e}") from e
+    
+    # Set text shaping for complex scripts BEFORE adding page
     pdf.set_text_shaping(True)
     pdf.add_page()
+    pdf.set_font("Khmer", size=12)
     
     return pdf
 
 
 def _render_pdf_title(pdf: Any, title: str) -> None:
-    pdf.set_font("Khmer", size=18)
-    pdf.multi_cell(w=0, h=12, text=title.strip() or "Chat Export")
-    pdf.ln(2)
+    """Render title with UTF-8 text validation."""
+    # Ensure text is proper UTF-8
+    try:
+        title_text = str(title).strip() or "Chat Export"
+        # Verify it's valid UTF-8
+        title_text.encode('utf-8').decode('utf-8')
+    except Exception:
+        title_text = "Chat Export"
+    
+    pdf.set_font("Khmer", size=16)
+    pdf.set_text_color(0, 0, 0)
+    pdf.multi_cell(w=0, h=10, text=title_text, new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
 
 
 def _render_pdf_generated_at(pdf: Any) -> None:
-    pdf.set_font("Khmer", size=10)
-    pdf.set_text_color(100, 100, 100)
+    """Render generation timestamp."""
+    pdf.set_font("Khmer", size=9)
+    pdf.set_text_color(120, 120, 120)
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    pdf.cell(w=0, h=8, text=f"Generated: {now_str}", new_x="LMARGIN", new_y="NEXT")
+    try:
+        now_str.encode('utf-8').decode('utf-8')
+    except Exception:
+        now_str = "Generated"
+    pdf.cell(w=0, h=6, text=f"Generated: {now_str}", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
-    pdf.ln(5)
+    pdf.ln(3)
 
 
 def _render_pdf_message(pdf: Any, speaker: str, content: str, created_at: str = "") -> None:
+    """Render message with proper UTF-8 text encoding."""
+    # Validate and clean timestamps
     timestamp = ""
     if created_at:
         try:
             dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
-            timestamp = dt.strftime("%Y-%m-%d %H:%M")
+            timestamp = dt.strftime("%H:%M")
         except Exception:
-            timestamp = str(created_at)
+            pass
 
-    header = f"{speaker}  |  {timestamp}" if timestamp else speaker
-    pdf.set_font("Khmer", size=10)
-    pdf.set_text_color(60, 60, 60)
-    pdf.cell(w=0, h=7, text=header, new_x="LMARGIN", new_y="NEXT")
-    pdf.set_text_color(0, 0, 0)
+    # Build and validate header
+    header = f"{speaker}"
+    if timestamp:
+        header = f"{speaker} | {timestamp}"
+    
+    try:
+        header.encode('utf-8').decode('utf-8')
+    except Exception:
+        header = speaker
 
-    if content.strip():
+    # Render header
+    pdf.set_font("Khmer", size=9)
+    pdf.set_text_color(80, 80, 80)
+    pdf.cell(w=0, h=6, text=header, new_x="LMARGIN", new_y="NEXT")
+    
+    # Render content with UTF-8 validation
+    if content and content.strip():
         pdf.set_font("Khmer", size=11)
-        # multi_cell with break_on_multiple_lines for proper Khmer text wrapping
-        pdf.multi_cell(w=0, h=7, text=content.strip(), new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(4)
+        pdf.set_text_color(0, 0, 0)
+        
+        # Ensure content is valid UTF-8
+        try:
+            content_clean = str(content).strip()
+            content_clean.encode('utf-8').decode('utf-8')
+        except Exception:
+            content_clean = "[Text encoding error]"
+        
+        pdf.multi_cell(w=0, h=7, text=content_clean, new_x="LMARGIN", new_y="NEXT")
+    
+    pdf.ln(2)
 
 
 async def build_khmer_pdf_full(
