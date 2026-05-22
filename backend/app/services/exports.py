@@ -17,8 +17,9 @@ from openpyxl import Workbook
 _FONT_BASE_DIR = Path(os.environ.get("FONT_CACHE_DIR", "/tmp" if Path("/tmp").exists() else tempfile.gettempdir()))
 _KHMER_FONT_PATH = _FONT_BASE_DIR / "NotoSansKhmer-Regular.ttf"
 _KHMER_FONT_URLS = (
-    "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts/hinted/ttf/NotoSansKhmer/NotoSansKhmer-Regular.ttf",
-    "https://raw.githubusercontent.com/notofonts/khmer/main/fonts/ttf/NotoSansKhmer/NotoSansKhmer-Regular.ttf",
+    "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@latest/hinted/ttf/NotoSansKhmer/NotoSansKhmer-Regular.ttf",
+    "https://github.com/notofonts/khmer/raw/main/fonts/ttf/NotoSansKhmer/NotoSansKhmer-Regular.ttf",
+    "https://fonts.google.com/download?family=Noto%20Sans%20Khmer",
 )
 _VALID_TTF_HEADERS = {b"\x00\x01\x00\x00", b"OTTO", b"true", b"ttcf"}
 
@@ -42,12 +43,16 @@ async def ensure_khmer_font() -> str | None:
         return str(_KHMER_FONT_PATH)
 
     # Try to download and cache in file system
-    for font_url in _KHMER_FONT_URLS:
+    for idx, font_url in enumerate(_KHMER_FONT_URLS):
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
                 response = await client.get(font_url)
                 response.raise_for_status()
                 font_data = response.content
+                
+                # Validate font data
+                if font_data[:4] not in _VALID_TTF_HEADERS or len(font_data) < 100_000:
+                    continue  # Invalid font, try next URL
                 
                 # Cache in memory for this session
                 _KHMER_FONT_CACHE = font_data
@@ -59,9 +64,7 @@ async def ensure_khmer_font() -> str | None:
                 except Exception:
                     pass  # Continue even if file write fails
                 
-                # Validate cached font
-                if font_data[:4] in _VALID_TTF_HEADERS and len(font_data) > 100_000:
-                    return str(_KHMER_FONT_PATH)  # File was written successfully
+                return str(_KHMER_FONT_PATH)
         except Exception:
             continue
 
@@ -69,7 +72,7 @@ async def ensure_khmer_font() -> str | None:
     if _KHMER_FONT_CACHE and _KHMER_FONT_CACHE[:4] in _VALID_TTF_HEADERS:
         # Write to temp location for this request
         try:
-            temp_font = Path(tempfile.gettempdir()) / "khmer_font_temp.ttf"
+            temp_font = Path(tempfile.gettempdir()) / f"khmer_font_{id(_KHMER_FONT_CACHE)}.ttf"
             temp_font.write_bytes(_KHMER_FONT_CACHE)
             return str(temp_font)
         except Exception:
