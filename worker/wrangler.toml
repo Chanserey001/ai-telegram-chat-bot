@@ -1,0 +1,66 @@
+name = "ai-assistant-groq"
+main = "src/index.ts"
+compatibility_date = "2026-03-21"
+account_id = "5b80dcb4a19a7058b601bf385db8f9fc"
+
+[vars]
+GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_TRANSCRIPTION_MODEL = "whisper-large-v3"
+GROQ_TRANSCRIPTION_MODEL_CANDIDATES = "whisper-large-v3,whisper-large-v3-turbo"
+GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+ASR_CANDIDATE_MODE = "multi"
+PUBLIC_APP_URL = "https://ai-assistant-groq-production.uychanserey44.workers.dev"
+DASHBOARD_URL = "https://ai-assistant-dashboard-groq.uychanserey44.workers.dev"
+RENDER_BACKEND_URL = "https://ai-bot-backend.onrender.com"
+
+[[durable_objects.bindings]]
+name = "CHAT_SESSIONS"
+class_name = "ChatSession"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "assistant_db_groq"
+database_id = "e70dd4a9-7382-4bb2-af41-60f979c0c2c7"
+
+[env.production]
+durable_objects.bindings = [
+  { name = "CHAT_SESSIONS", class_name = "ChatSession" }
+]
+d1_databases = [
+  { binding = "DB", database_name = "assistant_db_groq", database_id = "e70dd4a9-7382-4bb2-af41-60f979c0c2c7" }
+]
+
+[env.production.vars]
+GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_TRANSCRIPTION_MODEL = "whisper-large-v3"
+GROQ_TRANSCRIPTION_MODEL_CANDIDATES = "whisper-large-v3,whisper-large-v3-turbo"
+GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+ASR_CANDIDATE_MODE = "multi"
+SELF_HOSTED_ASR_URL = "https://have-deleted-remedy-oem.trycloudflare.com"
+SELF_HOSTED_ASR_TIMEOUT_MS = "8000"
+PUBLIC_APP_URL = "https://ai-assistant-groq-production.uychanserey44.workers.dev"
+DASHBOARD_URL = "https://ai-assistant-dashboard-groq.uychanserey44.workers.dev"
+RENDER_BACKEND_URL = "https://ai-bot-backend.onrender.com"
+
+[env.development]
+durable_objects.bindings = [
+  { name = "CHAT_SESSIONS", class_name = "ChatSession" }
+]
+d1_databases = [
+  { binding = "DB", database_name = "assistant_db_groq", database_id = "e70dd4a9-7382-4bb2-af41-60f979c0c2c7" }
+]
+
+[env.development.vars]
+GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_TRANSCRIPTION_MODEL = "whisper-large-v3"
+GROQ_TRANSCRIPTION_MODEL_CANDIDATES = "whisper-large-v3,whisper-large-v3-turbo"
+GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+ASR_CANDIDATE_MODE = "multi"
+# SELF_HOSTED_ASR_URL = "http://127.0.0.1:8000"
+PUBLIC_APP_URL = "http://127.0.0.1:8787"
+DASHBOARD_URL = "http://localhost:5173"
+RENDER_BACKEND_URL = "http://127.0.0.1:8000"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatSession"]
