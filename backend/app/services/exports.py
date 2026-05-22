@@ -16,15 +16,28 @@ from openpyxl import Workbook
 # Try /tmp (common in serverless), fall back to temp directory
 _FONT_BASE_DIR = Path(os.environ.get("FONT_CACHE_DIR", "/tmp" if Path("/tmp").exists() else tempfile.gettempdir()))
 _KHMER_FONT_PATH = _FONT_BASE_DIR / "NotoSansKhmer-Regular.ttf"
+_LATIN_FONT_PATH = _FONT_BASE_DIR / "NotoSans-Regular.ttf"
 _KHMER_FONT_URLS = (
     "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@latest/hinted/ttf/NotoSansKhmer/NotoSansKhmer-Regular.ttf",
     "https://github.com/notofonts/khmer/raw/main/fonts/ttf/NotoSansKhmer/NotoSansKhmer-Regular.ttf",
     "https://fonts.google.com/download?family=Noto%20Sans%20Khmer",
 )
+_LATIN_FONT_URLS = (
+    "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@latest/hinted/ttf/NotoSans/NotoSans-Regular.ttf",
+    "https://github.com/notofonts/noto-fonts/raw/main/hinted/ttf/NotoSans/NotoSans-Regular.ttf",
+)
 _VALID_TTF_HEADERS = {b"\x00\x01\x00\x00", b"OTTO", b"true", b"ttcf"}
+_KHMER_RE = re.compile(r"[\u1780-\u17ff]")
+_KHMER_CLUSTER_RE = re.compile(
+    r"[\u1780-\u17a2][\u17b6-\u17c8\u17cb-\u17d1\u17d3-\u17dd]*(?:\u17d2[\u1780-\u17a2][\u17b6-\u17c8\u17cb-\u17d1\u17d3-\u17dd]*)*"
+    r"|[\u17b6-\u17c8\u17cb-\u17d1\u17d3-\u17dd]"
+    r"|.",
+    re.DOTALL,
+)
 
 # Cache font data in memory as fallback
 _KHMER_FONT_CACHE: bytes | None = None
+_LATIN_FONT_CACHE: bytes | None = None
 
 
 def _is_valid_font_file(path: Path) -> bool:
@@ -81,6 +94,45 @@ async def ensure_khmer_font() -> str | None:
     return None
 
 
+async def ensure_latin_font() -> str | None:
+    global _LATIN_FONT_CACHE
+
+    if _is_valid_font_file(_LATIN_FONT_PATH):
+        return str(_LATIN_FONT_PATH)
+
+    for font_url in _LATIN_FONT_URLS:
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                response = await client.get(font_url)
+                response.raise_for_status()
+                font_data = response.content
+
+                if font_data[:4] not in _VALID_TTF_HEADERS or len(font_data) < 100_000:
+                    continue
+
+                _LATIN_FONT_CACHE = font_data
+
+                try:
+                    _LATIN_FONT_PATH.parent.mkdir(parents=True, exist_ok=True)
+                    _LATIN_FONT_PATH.write_bytes(font_data)
+                except Exception:
+                    pass
+
+                return str(_LATIN_FONT_PATH)
+        except Exception:
+            continue
+
+    if _LATIN_FONT_CACHE and _LATIN_FONT_CACHE[:4] in _VALID_TTF_HEADERS:
+        try:
+            temp_font = Path(tempfile.gettempdir()) / f"latin_font_{id(_LATIN_FONT_CACHE)}.ttf"
+            temp_font.write_bytes(_LATIN_FONT_CACHE)
+            return str(temp_font)
+        except Exception:
+            pass
+
+    return None
+
+
 def _build_unicode_pdf() -> Any:
     """Build a new PDF with Khmer font support using proper Unicode handling."""
     from fpdf import FPDF  # noqa: PLC0415
@@ -91,6 +143,7 @@ def _build_unicode_pdf() -> Any:
     
     # Add Khmer font with Unicode support
     font_path = str(_KHMER_FONT_PATH) if _KHMER_FONT_PATH.exists() else None
+    latin_font_path = str(_LATIN_FONT_PATH) if _LATIN_FONT_PATH.exists() else None
     
     if not font_path and _KHMER_FONT_CACHE:
         try:
@@ -106,50 +159,109 @@ def _build_unicode_pdf() -> Any:
     try:
         # Register Khmer font with full Unicode support and text shaping
         pdf.add_font(family="Khmer", fname=font_path, uni=True)
+        if latin_font_path:
+            pdf.add_font(family="Latin", fname=latin_font_path, uni=True)
+            pdf.set_fallback_fonts(["Latin"], exact_match=False)
     except Exception as e:
         raise RuntimeError(f"Failed to add Khmer font: {e}") from e
     
-    # Set text shaping for complex scripts BEFORE adding page
-    pdf.set_text_shaping(True)
+    try:
+        pdf.set_text_shaping(True, direction="ltr", script="khmr", language="khm")
+    except Exception as e:
+        raise RuntimeError("Khmer PDF shaping is unavailable. Install fpdf2[shaping] with uharfbuzz.") from e
     pdf.add_page()
     pdf.set_font("Khmer", size=12)
     
     return pdf
 
 
-def _render_pdf_title(pdf: Any, title: str) -> None:
-    """Render title with UTF-8 text validation."""
-    # Ensure text is proper UTF-8
+def _has_khmer(text: str) -> bool:
+    return bool(_KHMER_RE.search(text or ""))
+
+
+def _clean_pdf_text(text: str, fallback: str = "") -> str:
     try:
-        title_text = str(title).strip() or "Chat Export"
-        # Verify it's valid UTF-8
-        title_text.encode('utf-8').decode('utf-8')
+        value = str(text).replace("\r\n", "\n").replace("\r", "\n").strip()
+        value.encode("utf-8").decode("utf-8")
+        return value or fallback
     except Exception:
-        title_text = "Chat Export"
-    
+        return fallback
+
+
+def _khmer_clusters(text: str) -> list[str]:
+    return [match.group(0) for match in _KHMER_CLUSTER_RE.finditer(text)]
+
+
+def _break_long_token(pdf: Any, token: str, max_width: float) -> list[str]:
+    if pdf.get_string_width(token) <= max_width:
+        return [token]
+
+    pieces = _khmer_clusters(token) if _has_khmer(token) else list(token)
+    lines: list[str] = []
+    current = ""
+    for piece in pieces:
+        candidate = current + piece
+        if not current or pdf.get_string_width(candidate) <= max_width:
+            current = candidate
+            continue
+        lines.append(current)
+        current = piece
+    if current:
+        lines.append(current)
+    return lines or [token]
+
+
+def _wrap_pdf_text(pdf: Any, text: str, max_width: float) -> list[str]:
+    lines: list[str] = []
+    for paragraph in text.split("\n"):
+        if not paragraph.strip():
+            lines.append("")
+            continue
+
+        tokens = re.findall(r"\S+|\s+", paragraph)
+        current = ""
+        for token in tokens:
+            candidate = current + token
+            if not current or pdf.get_string_width(candidate) <= max_width:
+                current = candidate
+                continue
+
+            if current.strip():
+                lines.extend(_break_long_token(pdf, current.rstrip(), max_width))
+            current = token.lstrip()
+
+        if current.strip():
+            lines.extend(_break_long_token(pdf, current.rstrip(), max_width))
+
+    return lines or [""]
+
+
+def _write_wrapped_text(pdf: Any, text: str, line_height: float) -> None:
+    max_width = pdf.w - pdf.l_margin - pdf.r_margin
+    for line in _wrap_pdf_text(pdf, text, max_width):
+        pdf.cell(w=0, h=line_height, text=line, new_x="LMARGIN", new_y="NEXT")
+
+
+def _render_pdf_title(pdf: Any, title: str) -> None:
+    title_text = _clean_pdf_text(title, "Chat Export")
+
     pdf.set_font("Khmer", size=16)
     pdf.set_text_color(0, 0, 0)
-    pdf.multi_cell(w=0, h=10, text=title_text, new_x="LMARGIN", new_y="NEXT")
+    _write_wrapped_text(pdf, title_text, 10)
     pdf.ln(3)
 
 
-def _render_pdf_generated_at(pdf: Any) -> None:
-    """Render generation timestamp."""
+def _render_pdf_generated_at(pdf: Any, khmer: bool) -> None:
     pdf.set_font("Khmer", size=9)
     pdf.set_text_color(120, 120, 120)
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    try:
-        now_str.encode('utf-8').decode('utf-8')
-    except Exception:
-        now_str = "Generated"
-    pdf.cell(w=0, h=6, text=f"Generated: {now_str}", new_x="LMARGIN", new_y="NEXT")
+    label = "បានបង្កើត" if khmer else "Generated"
+    pdf.cell(w=0, h=6, text=f"{label}: {now_str}", new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
     pdf.ln(3)
 
 
 def _render_pdf_message(pdf: Any, speaker: str, content: str, created_at: str = "") -> None:
-    """Render message with proper UTF-8 text encoding."""
-    # Validate and clean timestamps
     timestamp = ""
     if created_at:
         try:
@@ -158,34 +270,17 @@ def _render_pdf_message(pdf: Any, speaker: str, content: str, created_at: str = 
         except Exception:
             pass
 
-    # Build and validate header
-    header = f"{speaker}"
-    if timestamp:
-        header = f"{speaker} | {timestamp}"
-    
-    try:
-        header.encode('utf-8').decode('utf-8')
-    except Exception:
-        header = speaker
+    header = f"{speaker} | {timestamp}" if timestamp else f"{speaker}"
 
-    # Render header
     pdf.set_font("Khmer", size=9)
     pdf.set_text_color(80, 80, 80)
     pdf.cell(w=0, h=6, text=header, new_x="LMARGIN", new_y="NEXT")
-    
-    # Render content with UTF-8 validation
+
     if content and content.strip():
         pdf.set_font("Khmer", size=11)
         pdf.set_text_color(0, 0, 0)
-        
-        # Ensure content is valid UTF-8
-        try:
-            content_clean = str(content).strip()
-            content_clean.encode('utf-8').decode('utf-8')
-        except Exception:
-            content_clean = "[Text encoding error]"
-        
-        pdf.multi_cell(w=0, h=7, text=content_clean, new_x="LMARGIN", new_y="NEXT")
+        content_clean = _clean_pdf_text(content, "[Text encoding error]")
+        _write_wrapped_text(pdf, content_clean, 7)
     
     pdf.ln(2)
 
@@ -199,14 +294,19 @@ async def build_khmer_pdf_full(
     font_result = await ensure_khmer_font()
     if not font_result:
         raise RuntimeError("Failed to load Khmer font for PDF generation")
+    await ensure_latin_font()
     
     pdf = _build_unicode_pdf()
+    is_khmer_export = _has_khmer(title) or any(_has_khmer(str(msg.get("content", ""))) for msg in messages)
     _render_pdf_title(pdf, title)
-    _render_pdf_generated_at(pdf)
+    _render_pdf_generated_at(pdf, is_khmer_export)
 
     for msg in messages:
         sender_type = msg.get("sender_type", "user")
-        speaker = "Bot" if sender_type == "assistant" else "User"
+        if is_khmer_export:
+            speaker = "ជំនួយការ" if sender_type == "assistant" else "អ្នក"
+        else:
+            speaker = "Bot" if sender_type == "assistant" else "User"
         _render_pdf_message(
             pdf,
             speaker=speaker,

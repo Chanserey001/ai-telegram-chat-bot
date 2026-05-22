@@ -12,7 +12,7 @@ from .api.telegram import router as telegram_router
 from .config import get_settings
 from .crud import init_db_defaults
 from .database import Base, SessionLocal, engine
-from .services.exports import ensure_khmer_font
+from .services.exports import ensure_khmer_font, ensure_latin_font
 from .services.telegram_bot import create_telegram_application
 
 
@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
     app.state.telegram_application = None
 
     await ensure_khmer_font()
+    await ensure_latin_font()
 
     if settings.bot_mode == "webhook" and settings.telegram_bot_token.strip():
         telegram_application = create_telegram_application(settings)
