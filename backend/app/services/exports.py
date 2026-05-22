@@ -85,11 +85,8 @@ def _build_unicode_pdf() -> Any:
     pdf = FPDF()
     pdf.set_margins(left=18, top=18, right=18)
     pdf.set_auto_page_break(auto=True, margin=18)
-    pdf.set_text_shaping(True)
-    pdf.add_page()
     
-    # Add Khmer font - if font file doesn't exist but we have cached font data,
-    # write it temporarily
+    # Add Khmer font BEFORE adding page
     font_path = str(_KHMER_FONT_PATH) if _KHMER_FONT_PATH.exists() else None
     
     if not font_path and _KHMER_FONT_CACHE:
@@ -102,11 +99,18 @@ def _build_unicode_pdf() -> Any:
     
     if font_path:
         try:
-            pdf.add_font(family="Khmer", fname=font_path)
+            # Add font with proper parameters for Khmer support
+            pdf.add_font(family="Khmer", fname=font_path, uni=True)
         except Exception as e:
             raise RuntimeError(f"Failed to add Khmer font from {font_path}: {e}") from e
     else:
         raise RuntimeError("Khmer font not available - could not download or cache font file")
+    
+    # Now add page after font is registered
+    pdf.set_text_shaping(True)
+    pdf.add_page()
+    
+    return pdf
 
 
 def _render_pdf_title(pdf: Any, title: str) -> None:
@@ -141,7 +145,8 @@ def _render_pdf_message(pdf: Any, speaker: str, content: str, created_at: str = 
 
     if content.strip():
         pdf.set_font("Khmer", size=11)
-        pdf.multi_cell(w=0, h=7, text=content.strip())
+        # multi_cell with break_on_multiple_lines for proper Khmer text wrapping
+        pdf.multi_cell(w=0, h=7, text=content.strip(), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
 
